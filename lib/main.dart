@@ -12,21 +12,74 @@ import 'services/ai_service.dart';
 
 const _groqApiKey = String.fromEnvironment('GROQ_API_KEY');
 
-void main() => runApp(const RelayApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: Color(0xFF0C0E14),
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
+  );
+  runApp(const RelayApp());
+}
 
 class RelayApp extends StatelessWidget {
   const RelayApp({super.key});
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: 'Relay',
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff5B5BD6)),
-          useMaterial3: true,
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Relay',
+      themeMode: ThemeMode.dark,
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF0C0E14),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF6366F1),
+          secondary: Color(0xFF38BDF8),
+          surface: Color(0xFF131722),
+          error: Color(0xFFF43F5E),
+          onPrimary: Colors.white,
+          onSurface: Color(0xFFF1F5F9),
         ),
-        home: const CaptureScreen(),
-      );
+        fontFamily: 'sans-serif',
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0C0E14),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          centerTitle: false,
+          titleTextStyle: TextStyle(
+            color: Color(0xFFF1F5F9),
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
+        ),
+        cardTheme: const CardThemeData(
+          color: Color(0xFF131722),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+            side: BorderSide(color: Color(0xFF22283A), width: 1),
+          ),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: const Color(0xFF1E2435),
+          contentTextStyle: const TextStyle(color: Color(0xFFF8FAFC), fontSize: 13),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: Color(0xFF333D56), width: 1),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+        useMaterial3: true,
+      ),
+      home: const CaptureScreen(),
+    );
+  }
 }
 
 class CaptureScreen extends StatefulWidget {
@@ -36,16 +89,27 @@ class CaptureScreen extends StatefulWidget {
   State<CaptureScreen> createState() => _CaptureScreenState();
 }
 
-class _CaptureScreenState extends State<CaptureScreen> {
+class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProviderStateMixin {
   final _speech = stt.SpeechToText();
   final _recorder = AudioRecorder();
   final _textController = TextEditingController();
   String _type = 'bug';
   bool _recording = false;
   String _heard = '';
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+  }
 
   @override
   void dispose() {
+    _pulseController.dispose();
     _textController.dispose();
     _speech.stop();
     _recorder.dispose();
@@ -114,75 +178,639 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   void _showError(String message) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.info_outline, color: Color(0xFFF43F5E), size: 18),
+              const SizedBox(width: 10),
+              Expanded(child: Text(message)),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
+  Color get _currentTypeColor {
+    switch (_type) {
+      case 'bug':
+        return const Color(0xFFF43F5E);
+      case 'commit':
+        return const Color(0xFF10B981);
+      default:
+        return const Color(0xFF6366F1);
+    }
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Relay'), centerTitle: false),
-        body: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text('Capture developer context', style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            const Text('Turn a thought, error, or screenshot into a structured artifact.'),
-            const SizedBox(height: 24),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'bug', label: Text('Bug')),
-                ButtonSegment(value: 'commit', label: Text('Commit / PR')),
-                ButtonSegment(value: 'feature', label: Text('Feature')),
-              ],
-              selected: {_type},
-              onSelectionChanged: (value) => setState(() => _type = value.first),
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E2435),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF2E374E)),
+              ),
+              child: const Text(
+                'RELAY',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2.0,
+                  color: Color(0xFFF1F5F9),
+                ),
+              ),
             ),
-            const SizedBox(height: 24),
-            _CaptureButton(
-              icon: _recording ? Icons.stop_circle_outlined : Icons.mic_none_outlined,
-              label: _recording ? 'Stop & process voice' : 'Record Voice',
-              subtitle: _recording ? (_heard.isEmpty ? 'Listening…' : _heard) : 'Speak a bug, fix, or idea',
-              onPressed: _toggleVoice,
+            const SizedBox(width: 10),
+            Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                color: Color(0xFF10B981),
+                shape: BoxShape.circle,
+              ),
             ),
-            const SizedBox(height: 12),
-            _CaptureButton(icon: Icons.camera_alt_outlined, label: 'Take Photo', subtitle: 'Extract text from a screenshot or whiteboard', onPressed: _takePhoto),
+            const SizedBox(width: 6),
+            const Text(
+              'READY',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF64748B),
+                letterSpacing: 1.0,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          children: [
+            // Header Section
+            const Text(
+              'Capture Context',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFFF8FAFC),
+                letterSpacing: -0.5,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Synthesize raw voice, optical text, or notes into structured developer artifacts.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Color(0xFF94A3B8),
+                height: 1.4,
+              ),
+            ),
             const SizedBox(height: 20),
-            TextField(
-              controller: _textController,
-              minLines: 4,
-              maxLines: 6,
-              decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'Type developer context…'),
+
+            // Target Artifact Type Selector
+            const _SectionLabel(label: 'TARGET ARTIFACT TYPE'),
+            const SizedBox(height: 8),
+            _TypeSelector(
+              selectedType: _type,
+              onChanged: (val) => setState(() => _type = val),
             ),
-            const SizedBox(height: 10),
-            FilledButton.icon(
-              icon: const Icon(Icons.auto_awesome),
-              label: const Text('Type Text & Create'),
-              onPressed: () {
+            const SizedBox(height: 24),
+
+            // Mode 1: Voice Capture Card
+            const _SectionLabel(label: 'INPUT SOURCE 01 / VOICE'),
+            const SizedBox(height: 8),
+            _VoiceCaptureCard(
+              isRecording: _recording,
+              heardText: _heard,
+              pulseAnimation: _pulseController,
+              accentColor: _currentTypeColor,
+              onTap: _toggleVoice,
+            ),
+            const SizedBox(height: 16),
+
+            // Mode 2: Photo OCR Card
+            const _SectionLabel(label: 'INPUT SOURCE 02 / OPTICAL OCR'),
+            const SizedBox(height: 8),
+            _PhotoOcrCard(onTap: _takePhoto),
+            const SizedBox(height: 16),
+
+            // Mode 3: Direct Text Input Card
+            const _SectionLabel(label: 'INPUT SOURCE 03 / DIRECT TEXT'),
+            const SizedBox(height: 8),
+            _DirectTextInputCard(
+              controller: _textController,
+              accentColor: _currentTypeColor,
+              onSubmit: () {
                 if (_textController.text.trim().isEmpty) {
-                  _showError('Enter some developer context first.');
+                  _showError('Enter developer context before processing.');
                 } else {
                   _createArtifact(_textController.text.trim());
                 }
               },
             ),
-            const Spacer(),
-            Text('API key missing? Relay uses a clearly labelled sample result.', style: Theme.of(context).textTheme.bodySmall),
-          ]),
+            const SizedBox(height: 24),
+
+            // Footer telemetry
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F121C),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF1E2435)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.hub_outlined, size: 12, color: Color(0xFF64748B)),
+                    SizedBox(width: 6),
+                    Text(
+                      'GROQ LLAMA-3.3 • LOCAL MLKIT OCR',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF64748B),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
 
-class _CaptureButton extends StatelessWidget {
-  const _CaptureButton({required this.icon, required this.label, required this.subtitle, required this.onPressed});
-  final IconData icon;
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.label});
   final String label;
-  final String subtitle;
-  final VoidCallback onPressed;
+
   @override
-  Widget build(BuildContext context) => OutlinedButton(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(padding: const EdgeInsets.all(18), alignment: Alignment.centerLeft),
-        child: Row(children: [Icon(icon), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label), const SizedBox(height: 3), Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)]))]),
-      );
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFF64748B),
+        letterSpacing: 1.0,
+      ),
+    );
+  }
+}
+
+class _TypeSelector extends StatelessWidget {
+  const _TypeSelector({required this.selectedType, required this.onChanged});
+  final String selectedType;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final types = [
+      {'id': 'bug', 'label': 'Bug', 'icon': Icons.bug_report_outlined, 'color': const Color(0xFFF43F5E)},
+      {'id': 'commit', 'label': 'Commit/PR', 'icon': Icons.merge_type_rounded, 'color': const Color(0xFF10B981)},
+      {'id': 'feature', 'label': 'Feature', 'icon': Icons.lightbulb_outline_rounded, 'color': const Color(0xFF818CF8)},
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF131722),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF22283A)),
+      ),
+      child: Row(
+        children: types.map((t) {
+          final isSelected = selectedType == t['id'];
+          final color = t['color'] as Color;
+          return Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => onChanged(t['id'] as String),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: isSelected ? color.withAlpha(35) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isSelected ? color.withAlpha(120) : Colors.transparent,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      t['icon'] as IconData,
+                      size: 16,
+                      color: isSelected ? color : const Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      t['label'] as String,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                        color: isSelected ? const Color(0xFFF8FAFC) : const Color(0xFF94A3B8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _VoiceCaptureCard extends StatelessWidget {
+  const _VoiceCaptureCard({
+    required this.isRecording,
+    required this.heardText,
+    required this.pulseAnimation,
+    required this.accentColor,
+    required this.onTap,
+  });
+
+  final bool isRecording;
+  final String heardText;
+  final Animation<double> pulseAnimation;
+  final Color accentColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: pulseAnimation,
+      builder: (context, child) {
+        return Container(
+          decoration: BoxDecoration(
+            color: isRecording ? const Color(0xFF1A1117) : const Color(0xFF131722),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isRecording
+                  ? const Color(0xFFF43F5E).withAlpha((100 + (pulseAnimation.value * 155)).toInt())
+                  : const Color(0xFF22283A),
+              width: isRecording ? 1.5 : 1.0,
+            ),
+            boxShadow: isRecording
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFFF43F5E).withAlpha((30 * pulseAnimation.value).toInt()),
+                      blurRadius: 16,
+                      spreadRadius: 2,
+                    )
+                  ]
+                : [],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: isRecording
+                                ? const Color(0xFFF43F5E).withAlpha(40)
+                                : const Color(0xFF1E2435),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isRecording
+                                  ? const Color(0xFFF43F5E).withAlpha(120)
+                                  : const Color(0xFF2E374E),
+                            ),
+                          ),
+                          child: Icon(
+                            isRecording ? Icons.stop_rounded : Icons.mic_none_rounded,
+                            color: isRecording ? const Color(0xFFF43F5E) : const Color(0xFF38BDF8),
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    isRecording ? 'RECORDING VOICE...' : 'Audio Stream',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: isRecording ? const Color(0xFFF43F5E) : const Color(0xFFF1F5F9),
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF0F121C),
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: const Color(0xFF22283A)),
+                                    ),
+                                    child: const Text(
+                                      'VOICE',
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF64748B),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                isRecording
+                                    ? 'Tap card to finalize speech stream'
+                                    : 'Dictate bug symptoms, PR context, or architecture ideas',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF94A3B8),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (isRecording) ...[
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0C0E14),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFF2E1A24)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '> ',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                color: Color(0xFFF43F5E),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                heardText.isEmpty ? 'Listening for speech input...' : heardText,
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 12,
+                                  color: heardText.isEmpty
+                                      ? const Color(0xFF64748B)
+                                      : const Color(0xFFF1F5F9),
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PhotoOcrCard extends StatelessWidget {
+  const _PhotoOcrCard({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF131722),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF22283A)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E2435),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFF2E374E)),
+                  ),
+                  child: const Icon(
+                    Icons.document_scanner_outlined,
+                    color: Color(0xFF10B981),
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'Optical Lens OCR',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFFF1F5F9),
+                            ),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F121C),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: const Color(0xFF22283A)),
+                            ),
+                            child: const Text(
+                              'ML KIT',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF64748B),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      const Text(
+                        'Extract text directly from terminal logs, IDE, or diagrams',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DirectTextInputCard extends StatelessWidget {
+  const _DirectTextInputCard({
+    required this.controller,
+    required this.accentColor,
+    required this.onSubmit,
+  });
+
+  final TextEditingController controller;
+  final Color accentColor;
+  final VoidCallback onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF131722),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF22283A)),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.terminal_rounded, size: 16, color: Color(0xFF818CF8)),
+              const SizedBox(width: 8),
+              const Text(
+                'Prompt Editor',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFF1F5F9),
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F121C),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFF22283A)),
+                ),
+                child: const Text(
+                  'TEXT',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF090B10),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF1E2435)),
+            ),
+            child: TextField(
+              controller: controller,
+              minLines: 3,
+              maxLines: 6,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: Color(0xFFE2E8F0),
+                height: 1.4,
+              ),
+              cursorColor: accentColor,
+              decoration: const InputDecoration(
+                hintText: 'e.g. auth service throwing 401 when refresh token expires...',
+                hintStyle: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: Color(0xFF475569),
+                ),
+                contentPadding: EdgeInsets.all(12),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 42,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accentColor,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.bolt_rounded, size: 18),
+              label: const Text(
+                'Synthesize Artifact',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              onPressed: onSubmit,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class ProcessingScreen extends StatefulWidget {
