@@ -18,9 +18,14 @@ void main() async {
   } catch (e) {
     debugPrint('Relay: .env asset failed to load ($e) — running in MOCK mode');
   }
-  final hasKey = dotenv.isInitialized &&
-      (dotenv.env['GROQ_API_KEY']?.trim().isNotEmpty ?? false);
-  debugPrint('Relay: using ${hasKey ? 'LIVE' : 'MOCK'} mode');
+
+  final apiKey = dotenv.env['GROQ_API_KEY']?.trim() ?? '';
+  print("RELAY DEBUG: API key loaded, length=${apiKey.length}");
+
+  if (apiKey.isEmpty) {
+    throw Exception("GROQ_API_KEY is missing or empty — check .env file");
+  }
+
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -255,6 +260,23 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF64748B),
                 letterSpacing: 1.0,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.green.withOpacity(0.5)),
+              ),
+              child: const Text(
+                'Mode: LIVE (Groq)',
+                style: TextStyle(
+                  color: Colors.green,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],

@@ -39,8 +39,8 @@ class AiParseException extends AiServiceException {
 class AiService {
   AiService({
     String? apiKey,
-    this.primaryModel = 'llama-3.3-70b-versatile',
-    this.fallbackModel = 'llama-3.1-8b-instant',
+    this.primaryModel = 'groq/compound',
+    this.fallbackModel = 'qwen/qwen3.6-27b',
     this.timeout = const Duration(seconds: 12),
     http.Client? httpClient,
   })  : apiKey = apiKey ?? (dotenv.isInitialized ? (dotenv.env['GROQ_API_KEY'] ?? '') : ''),
@@ -61,8 +61,7 @@ class AiService {
     required String type,
   }) async {
     if (apiKey.trim().isEmpty) {
-      debugPrint('Relay AiService: API key is empty — returning MOCK artifact');
-      return _mockArtifact(type, rawText);
+      throw AiServiceException("GROQ_API_KEY is missing. App should have crashed at startup.");
     }
     debugPrint('Relay AiService: API key present (${apiKey.substring(0, 4)}…), calling Groq API');
 
@@ -77,6 +76,7 @@ class AiService {
 
   Future<ArtifactModel> _callApi(String rawText, String type, String model) async {
     debugPrint('Relay AiService: POST $_endpoint (model: $model, type: $type, input: ${rawText.length} chars)');
+    print("RELAY DEBUG: Making real API call to Groq now");
     final http.Response response;
     try {
       response = await _client
@@ -191,35 +191,4 @@ class AiService {
               '{title, components (array), api_changes (array), implementation_tasks (array)}.',
       };
 
-  // ── Mock fallback (no API key) ──
-
-  ArtifactModel _mockArtifact(String type, String text) {
-    switch (type) {
-      case 'commit':
-        return ArtifactModel.fromJson('commit', {
-          'commit_message': 'fix(form): handle empty server response',
-          'problem': text.isNotEmpty ? text : 'User did not provide problem description.',
-          'solution': 'Validate the response before using its data.',
-          'testing': 'Submit a form with an empty response and verify no crash.',
-        });
-      case 'bug':
-        return ArtifactModel.fromJson('bug', {
-          'title': text.isNotEmpty ? text : 'Bug Report',
-          'environment': 'Not specified',
-          'possible_causes': ['Captured input processing failed', 'Missing fallback handler'],
-          'debug_steps': ['Check submitted text', 'Verify API key is configured'],
-        });
-      default:
-        return ArtifactModel.fromJson('feature', {
-          'title': text.isNotEmpty ? text : 'Feature Proposal',
-          'components': ['Capture screen', 'AI service', 'Output screen'],
-          'api_changes': ['None'],
-          'implementation_tasks': [
-            'Capture context',
-            'Generate structured artifact',
-            'Export it',
-          ],
-        });
-    }
-  }
 }
