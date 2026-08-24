@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
@@ -10,10 +11,9 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'models/artifact_model.dart';
 import 'services/ai_service.dart';
 
-const _groqApiKey = String.fromEnvironment('GROQ_API_KEY');
-
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -121,7 +121,11 @@ class _CaptureScreenState extends State<CaptureScreen> with SingleTickerProvider
       await _speech.stop();
       await _recorder.stop();
       setState(() => _recording = false);
-      if (_heard.trim().isNotEmpty && mounted) _createArtifact(_heard);
+      if (_heard.trim().length < 3) {
+        _showError("Couldn't catch that — please try again.");
+        return;
+      }
+      if (mounted) _createArtifact(_heard);
       return;
     }
     final speechAvailable = await _speech.initialize(
@@ -822,64 +826,474 @@ class ProcessingScreen extends StatefulWidget {
 }
 
 class _ProcessingScreenState extends State<ProcessingScreen> {
+  bool _loading = true;
+  String? _errorMessage;
+
   @override
   void initState() {
     super.initState();
-    unawaited(_process());
+    _process();
   }
 
   Future<void> _process() async {
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
     try {
-      final artifact = await AiService(apiKey: _groqApiKey).createArtifact(rawText: widget.input, type: widget.type);
+      final artifact = await AiService().createArtifact(
+        rawText: widget.input,
+        type: widget.type,
+      );
       if (mounted) Navigator.of(context).pop(artifact);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not create artifact: $error')));
-        Navigator.of(context).pop();
+        setState(() {
+          _loading = false;
+          _errorMessage = error.toString();
+        });
       }
     }
   }
 
+  String get _loadingLabel => switch (widget.type) {
+        'commit' => 'Structuring your commit…',
+        'bug' => 'Analyzing bug report…',
+        _ => 'Building feature proposal…',
+      };
+
   @override
-  Widget build(BuildContext context) => const Scaffold(body: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 18), Text('Relay is structuring your developer context…')])));
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0C0E14),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded, color: Color(0xFF94A3B8)),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: _loading ? _buildLoading() : _buildError(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoading() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 48,
+          height: 48,
+          child: CircularProgressIndicator(
+            strokeWidth: 3,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          _loadingLabel,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFFF1F5F9),
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Sending to Groq LLM…',
+          style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildError() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1117),
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFF3D1525)),
+          ),
+          child: const Icon(Icons.error_outline_rounded, color: Color(0xFFF43F5E), size: 32),
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'Something went wrong',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFFF8FAFC),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _errorMessage ?? 'Unknown error',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8), height: 1.4),
+        ),
+        const SizedBox(height: 24),
+        SizedBox(
+          width: double.infinity,
+          height: 46,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF6366F1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.refresh_rounded, size: 20),
+            label: const Text('Retry', style: TextStyle(fontWeight: FontWeight.w700)),
+            onPressed: _process,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Go back', style: TextStyle(color: Color(0xFF64748B))),
+        ),
+      ],
+    );
+  }
 }
 
-class OutputScreen extends StatelessWidget {
+// ── Output Screen ──
+
+class OutputScreen extends StatefulWidget {
   const OutputScreen({super.key, required this.artifact});
   final ArtifactModel artifact;
+  @override
+  State<OutputScreen> createState() => _OutputScreenState();
+}
 
-  String get _formatted => artifact.fields.entries.map((entry) => '${entry.key}: ${entry.value}').join('\n\n');
+class _OutputScreenState extends State<OutputScreen> {
+  bool _copied = false;
+
+  void _copyToClipboard() async {
+    await Clipboard.setData(ClipboardData(text: widget.artifact.toFormattedString()));
+    if (mounted) {
+      setState(() => _copied = true);
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _copied = false);
+      });
+    }
+  }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(artifact.type.toUpperCase())),
-        body: ListView(padding: const EdgeInsets.all(24), children: [
-          Text(artifact.title, style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: 20),
-          ...artifact.fields.entries.map(
-            (entry) => Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(entry.key, style: Theme.of(context).textTheme.titleSmall),
-                    const SizedBox(height: 8),
-                    SelectableText('${entry.value}'),
-                  ],
+  Widget build(BuildContext context) {
+    final artifact = widget.artifact;
+    final isCommit = artifact.type == 'commit';
+    final isBug = artifact.type == 'bug';
+
+    final Color accentColor;
+    final IconData typeIcon;
+    final String typeLabel;
+
+    if (isCommit) {
+      accentColor = const Color(0xFF10B981);
+      typeIcon = Icons.merge_type_rounded;
+      typeLabel = 'COMMIT / PR';
+    } else if (isBug) {
+      accentColor = const Color(0xFFF43F5E);
+      typeIcon = Icons.bug_report_outlined;
+      typeLabel = 'BUG REPORT';
+    } else {
+      accentColor = const Color(0xFF818CF8);
+      typeIcon = Icons.lightbulb_outline_rounded;
+      typeLabel = 'FEATURE PROPOSAL';
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0C0E14),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: Color(0xFF94A3B8)),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Row(
+          children: [
+            Icon(typeIcon, size: 16, color: accentColor),
+            const SizedBox(width: 8),
+            Text(
+              typeLabel,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: accentColor,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                children: [
+                  if (isCommit) ..._buildCommitOutput(artifact),
+                  if (isBug) ..._buildBugOutput(artifact),
+                  if (!isCommit && !isBug) ..._buildFeatureOutput(artifact),
+                ],
+              ),
+            ),
+            // Sticky bottom copy button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+              child: SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _copied ? const Color(0xFF10B981) : accentColor,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: Icon(
+                    _copied ? Icons.check_rounded : Icons.content_copy_rounded,
+                    size: 20,
+                  ),
+                  label: Text(
+                    _copied ? 'Copied!' : 'Copy to Clipboard',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                  ),
+                  onPressed: _copyToClipboard,
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Commit layout ──
+
+  List<Widget> _buildCommitOutput(ArtifactModel a) {
+    return [
+      // Commit message — prominent monospace terminal card
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A0D12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF1C3A2A), width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.commit_rounded, size: 14, color: Color(0xFF10B981)),
+                SizedBox(width: 6),
+                Text(
+                  'COMMIT MESSAGE',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF10B981),
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              a.fields['commit_message'] as String? ?? '',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFF8FAFC),
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 20),
+      _fieldSection('Problem', a.fields['problem'], Icons.warning_amber_rounded, const Color(0xFFFBBF24)),
+      const SizedBox(height: 14),
+      _fieldSection('Solution', a.fields['solution'], Icons.check_circle_outline_rounded, const Color(0xFF10B981)),
+      const SizedBox(height: 14),
+      _fieldSection('Testing', a.fields['testing'], Icons.science_outlined, const Color(0xFF38BDF8)),
+    ];
+  }
+
+  // ── Bug layout ──
+
+  List<Widget> _buildBugOutput(ArtifactModel a) {
+    return [
+      _titleCard(a.title, const Color(0xFFF43F5E)),
+      const SizedBox(height: 14),
+      _fieldSection('Environment', a.fields['environment'], Icons.computer_rounded, const Color(0xFF94A3B8)),
+      const SizedBox(height: 14),
+      _listSection('Possible Causes', a.fields['possible_causes'], Icons.help_outline_rounded, const Color(0xFFFBBF24)),
+      const SizedBox(height: 14),
+      _listSection('Debug Steps', a.fields['debug_steps'], Icons.list_alt_rounded, const Color(0xFF38BDF8)),
+    ];
+  }
+
+  // ── Feature layout ──
+
+  List<Widget> _buildFeatureOutput(ArtifactModel a) {
+    return [
+      _titleCard(a.title, const Color(0xFF818CF8)),
+      const SizedBox(height: 14),
+      _listSection('Components', a.fields['components'], Icons.widgets_outlined, const Color(0xFF10B981)),
+      const SizedBox(height: 14),
+      _listSection('API Changes', a.fields['api_changes'], Icons.api_rounded, const Color(0xFFFBBF24)),
+      const SizedBox(height: 14),
+      _listSection('Implementation Tasks', a.fields['implementation_tasks'], Icons.task_alt_rounded, const Color(0xFF38BDF8)),
+    ];
+  }
+
+  // ── Shared building blocks ──
+
+  Widget _titleCard(String title, Color color) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withAlpha(15),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withAlpha(60)),
+      ),
+      child: SelectableText(
+        title,
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          color: color,
+          height: 1.3,
+        ),
+      ),
+    );
+  }
+
+  Widget _fieldSection(String label, dynamic value, IconData icon, Color color) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF131722),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF22283A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: color),
+              const SizedBox(width: 6),
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: _formatted));
-              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Formatted artifact copied to clipboard.')));
-            },
-            icon: const Icon(Icons.content_copy),
-            label: const Text('Copy formatted output'),
+          const SizedBox(height: 10),
+          SelectableText(
+            '${value ?? 'Not specified'}',
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFFE2E8F0),
+              height: 1.5,
+            ),
           ),
-        ]),
-      );
+        ],
+      ),
+    );
+  }
+
+  Widget _listSection(String label, dynamic value, IconData icon, Color color) {
+    final List<String> items;
+    if (value is List) {
+      items = value.map((e) => e.toString()).toList();
+    } else if (value is String) {
+      items = [value];
+    } else {
+      items = ['Not specified'];
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF131722),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF22283A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: color),
+              const SizedBox(width: 6),
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...items.asMap().entries.map(
+                (entry) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${entry.key + 1}.',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: color.withAlpha(180),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: SelectableText(
+                          entry.value,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFFE2E8F0),
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+        ],
+      ),
+    );
+  }
 }
+

@@ -1,117 +1,179 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/artifact_model.dart';
 
+// ── Error types ──
+
+/// Base class so callers can distinguish AI failures from other exceptions.
+class AiServiceException implements Exception {
+  AiServiceException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+class AiNetworkException extends AiServiceException {
+  AiNetworkException([String? detail])
+      : super(detail ?? 'Network error — check your connection and try again.');
+}
+
+class AiTimeoutException extends AiServiceException {
+  AiTimeoutException() : super('Request timed out. Please try again.');
+}
+
+class AiRateLimitException extends AiServiceException {
+  AiRateLimitException() : super('Rate limited — retrying with a smaller model…');
+}
+
+class AiParseException extends AiServiceException {
+  AiParseException() : super("Couldn't process that — the response wasn't valid. Try again.");
+}
+
+// ── Service ──
+
 class AiService {
-  AiService({required this.apiKey, this.model = 'llama-3.3-70b-versatile'});
+  AiService({
+    String? apiKey,
+    this.primaryModel = 'llama-3.3-70b-versatile',
+    this.fallbackModel = 'llama-3.1-8b-instant',
+    this.timeout = const Duration(seconds: 12),
+  }) : apiKey = apiKey ?? (dotenv.env['GROQ_API_KEY'] ?? '');
 
   final String apiKey;
-  final String model;
+  final String primaryModel;
+  final String fallbackModel;
+  final Duration timeout;
 
+  static const _endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+
+  /// Main entry point — returns a structured [ArtifactModel] or throws an
+  /// [AiServiceException] subclass the UI can handle.
   Future<ArtifactModel> createArtifact({
     required String rawText,
     required String type,
   }) async {
     if (apiKey.trim().isEmpty) return _mockArtifact(type, rawText);
 
-    final response = await http.post(
-      Uri.parse('https://api.groq.com/openai/v1/chat/completions'),
-      headers: {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'model': model,
-        'temperature': 0.2,
-        'messages': [
-          {'role': 'system', 'content': _promptFor(type)},
-          {'role': 'user', 'content': rawText},
-        ],
-      }),
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('AI request failed (${response.statusCode}): ${response.body}');
+    try {
+      return await _callApi(rawText, type, primaryModel);
+    } on AiRateLimitException {
+      // Automatic fallback — try the smaller model once.
+      return await _callApi(rawText, type, fallbackModel);
     }
-    final payload = jsonDecode(response.body) as Map<String, dynamic>;
-    final content = payload['choices'][0]['message']['content'] as String;
-    return _parse(type, content);
   }
 
-  String _promptFor(String type) => switch (type) {
-        'bug' => '''Turn the user input into exactly this plain-text format. Do not add commentary.
-Bug Title: [short title]
-Description: [what's happening]
-Environment: [inferred or "Not specified"]
-Possible Causes: [numbered list]
-Debug Steps: [numbered list]''',
-        'commit' => '''Turn the user input into exactly this plain-text format. Do not add commentary.
-Commit: [type(scope): short message, e.g. "fix(auth): handle null token response"]
-PR Description:
-Problem: [what was wrong]
-Solution: [what was done]
-Testing: [how to verify]''',
-        _ => '''Turn the user input into exactly this plain-text format. Do not add commentary.
-Feature: [title]
-Components: [list]
-API Changes: [list or "None"]
-Implementation Tasks: [numbered list]''',
+  Future<ArtifactModel> _callApi(String rawText, String type, String model) async {
+    final http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse(_endpoint),
+            headers: {
+              'Authorization': 'Bearer $apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'model': model,
+              'temperature': 0.2,
+              'response_format': {'type': 'json_object'},
+              'messages': [
+                {'role': 'system', 'content': _systemPromptFor(type)},
+                {'role': 'user', 'content': rawText},
+              ],
+            }),
+          )
+          .timeout(timeout);
+    } on TimeoutException {
+      throw AiTimeoutException();
+    } catch (e) {
+      throw AiNetworkException(e.toString());
+    }
+
+    if (response.statusCode == 429) {
+      throw AiRateLimitException();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AiNetworkException(
+        'Groq returned ${response.statusCode}. Please try again.',
+      );
+    }
+
+    // Parse the outer response envelope.
+    final Map<String, dynamic> payload;
+    try {
+      payload = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw AiParseException();
+    }
+
+    final content = payload['choices']?[0]?['message']?['content'];
+    if (content is! String || content.trim().isEmpty) {
+      throw AiParseException();
+    }
+
+    // Parse the inner JSON object the model was forced to produce.
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(content) as Map<String, dynamic>;
+    } catch (_) {
+      throw AiParseException();
+    }
+
+    return ArtifactModel.fromJson(type, json);
+  }
+
+  // ── System prompts (exact spec) ──
+
+  String _systemPromptFor(String type) => switch (type) {
+        'commit' =>
+          'You are a developer assistant that converts a spoken description of a code fix '
+              'into a structured commit message and PR description. Always respond with valid JSON '
+              'matching this exact schema: {commit_message, problem, solution, testing}. '
+              'The commit_message must follow conventional commit format (type(scope): message).',
+        'bug' =>
+          'You are a developer assistant that converts error text into a structured bug report. '
+              'Always respond with valid JSON matching this exact schema: '
+              '{title, environment, possible_causes (array), debug_steps (array)}. '
+              "If environment cannot be inferred, use 'Not specified'.",
+        _ =>
+          'You are a developer assistant that converts an architecture description into a '
+              'structured feature proposal. Always respond with valid JSON matching this exact schema: '
+              '{title, components (array), api_changes (array), implementation_tasks (array)}.',
       };
 
-  ArtifactModel _parse(String type, String content) {
-    final labels = switch (type) {
-      'bug' => ['Bug Title', 'Description', 'Environment', 'Possible Causes', 'Debug Steps'],
-      'commit' => ['Commit', 'PR Description', 'Problem', 'Solution', 'Testing'],
-      _ => ['Feature', 'Components', 'API Changes', 'Implementation Tasks'],
-    };
-    final fields = <String, dynamic>{};
-    String? current;
-    for (final rawLine in content.split('\n')) {
-      final line = rawLine.trim();
-      final found = labels.where((label) => line.startsWith('$label:')).firstOrNull;
-      if (found != null) {
-        current = found;
-        fields[current] = line.substring(found.length + 1).trim();
-      } else if (current != null && line.isNotEmpty) {
-        fields[current] = '${fields[current]}\n$line'.trim();
-      }
-    }
-    for (final label in labels) {
-      fields.putIfAbsent(label, () => 'Not specified');
-    }
-    final titleKey = type == 'bug' ? 'Bug Title' : type == 'commit' ? 'Commit' : 'Feature';
-    return ArtifactModel(type: type, title: fields[titleKey] as String, fields: fields);
-  }
+  // ── Mock fallback (no API key) ──
 
   ArtifactModel _mockArtifact(String type, String text) {
-    final fields = switch (type) {
-      'bug' => {
-          'Bug Title': 'Sample: app fails after submitting a form',
-          'Description': text,
-          'Environment': 'Not specified',
-          'Possible Causes': '1. Invalid response parsing\n2. Missing null check',
-          'Debug Steps': '1. Submit the form\n2. Inspect the network response',
-        },
-      'commit' => {
-          'Commit': 'fix(form): handle empty server response',
-          'PR Description': '',
-          'Problem': text,
-          'Solution': 'Validate the response before using its data.',
-          'Testing': 'Submit a form with an empty response and verify no crash.',
-        },
-      _ => {
-          'Feature': 'Sample: developer context relay',
-          'Components': 'Capture screen, AI service, output screen',
-          'API Changes': 'None',
-          'Implementation Tasks': '1. Capture context\n2. Generate structured artifact\n3. Export it',
-        },
-    };
-    final titleKey = type == 'bug' ? 'Bug Title' : type == 'commit' ? 'Commit' : 'Feature';
-    return ArtifactModel(type: type, title: fields[titleKey]!, fields: fields);
+    switch (type) {
+      case 'commit':
+        return ArtifactModel.fromJson('commit', {
+          'commit_message': 'fix(form): handle empty server response',
+          'problem': text,
+          'solution': 'Validate the response before using its data.',
+          'testing': 'Submit a form with an empty response and verify no crash.',
+        });
+      case 'bug':
+        return ArtifactModel.fromJson('bug', {
+          'title': 'Sample: app fails after submitting a form',
+          'environment': 'Not specified',
+          'possible_causes': ['Invalid response parsing', 'Missing null check'],
+          'debug_steps': ['Submit the form', 'Inspect the network response'],
+        });
+      default:
+        return ArtifactModel.fromJson('feature', {
+          'title': 'Sample: developer context relay',
+          'components': ['Capture screen', 'AI service', 'Output screen'],
+          'api_changes': ['None'],
+          'implementation_tasks': [
+            'Capture context',
+            'Generate structured artifact',
+            'Export it',
+          ],
+        });
+    }
   }
-}
-
-extension<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
 }
