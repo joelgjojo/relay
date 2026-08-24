@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:relay/services/ai_service.dart';
-import 'package:relay/models/artifact_model.dart';
 
 void main() {
   group('AiService API tests', () {
