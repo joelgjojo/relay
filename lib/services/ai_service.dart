@@ -30,7 +30,7 @@ class AiRateLimitException extends AiServiceException {
 }
 
 class AiParseException extends AiServiceException {
-  AiParseException() : super("Couldn't process that — the response wasn't valid. Try again.");
+  AiParseException([String? detail]) : super(detail ?? "Couldn't process that — the response wasn't valid. Try again.");
 }
 
 // ── Service ──
@@ -41,12 +41,15 @@ class AiService {
     this.primaryModel = 'llama-3.3-70b-versatile',
     this.fallbackModel = 'llama-3.1-8b-instant',
     this.timeout = const Duration(seconds: 12),
-  }) : apiKey = apiKey ?? (dotenv.env['GROQ_API_KEY'] ?? '');
+    http.Client? httpClient,
+  })  : apiKey = apiKey ?? (dotenv.env['GROQ_API_KEY'] ?? ''),
+        _client = httpClient ?? http.Client();
 
   final String apiKey;
   final String primaryModel;
   final String fallbackModel;
   final Duration timeout;
+  final http.Client _client;
 
   static const _endpoint = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -69,7 +72,7 @@ class AiService {
   Future<ArtifactModel> _callApi(String rawText, String type, String model) async {
     final http.Response response;
     try {
-      response = await http
+      response = await _client
           .post(
             Uri.parse(_endpoint),
             headers: {
@@ -96,31 +99,67 @@ class AiService {
     if (response.statusCode == 429) {
       throw AiRateLimitException();
     }
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw AiNetworkException(
-        'Groq returned ${response.statusCode}. Please try again.',
-      );
+
+    if (response.body.trim().isEmpty) {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw AiNetworkException('Groq returned ${response.statusCode}. Please try again.');
+      }
+      throw AiParseException('API returned an empty response body.');
     }
 
     // Parse the outer response envelope.
     final Map<String, dynamic> payload;
     try {
-      payload = jsonDecode(response.body) as Map<String, dynamic>;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw AiParseException('API response is not a valid JSON object.');
+      }
+      payload = decoded;
     } catch (_) {
-      throw AiParseException();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw AiNetworkException('Groq returned ${response.statusCode}. Please try again.');
+      }
+      throw AiParseException('Failed to parse API response JSON.');
     }
 
-    final content = payload['choices']?[0]?['message']?['content'];
+    // Handle Groq API returning an error object instead of success
+    if (payload.containsKey('error') && payload['error'] != null) {
+      final errorMsg = payload['error'] is Map ? payload['error']['message'] : payload['error'].toString();
+      throw AiNetworkException('API Error: $errorMsg');
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AiNetworkException('Groq returned ${response.statusCode}. Please try again.');
+    }
+
+    final choices = payload['choices'];
+    if (choices is! List || choices.isEmpty) {
+      throw AiParseException('Expected fields are missing from API response (choices).');
+    }
+
+    final message = choices[0]?['message'];
+    if (message is! Map) {
+      throw AiParseException('Expected fields are missing from API response (message).');
+    }
+
+    final content = message['content'];
+    if (content == null) {
+      throw AiParseException('Nested field "content" is null.');
+    }
     if (content is! String || content.trim().isEmpty) {
-      throw AiParseException();
+      throw AiParseException('Nested field "content" is empty or not a string.');
     }
 
     // Parse the inner JSON object the model was forced to produce.
     final Map<String, dynamic> json;
     try {
-      json = jsonDecode(content) as Map<String, dynamic>;
+      final decodedContent = jsonDecode(content);
+      if (decodedContent is! Map<String, dynamic>) {
+        throw AiParseException('LLM output is not a valid JSON object.');
+      }
+      json = decodedContent;
     } catch (_) {
-      throw AiParseException();
+      throw AiParseException('Failed to parse LLM output JSON.');
     }
 
     return ArtifactModel.fromJson(type, json);
@@ -152,20 +191,20 @@ class AiService {
       case 'commit':
         return ArtifactModel.fromJson('commit', {
           'commit_message': 'fix(form): handle empty server response',
-          'problem': text,
+          'problem': text.isNotEmpty ? text : 'User did not provide problem description.',
           'solution': 'Validate the response before using its data.',
           'testing': 'Submit a form with an empty response and verify no crash.',
         });
       case 'bug':
         return ArtifactModel.fromJson('bug', {
-          'title': 'Sample: app fails after submitting a form',
+          'title': text.isNotEmpty ? text : 'Bug Report',
           'environment': 'Not specified',
-          'possible_causes': ['Invalid response parsing', 'Missing null check'],
-          'debug_steps': ['Submit the form', 'Inspect the network response'],
+          'possible_causes': ['Captured input processing failed', 'Missing fallback handler'],
+          'debug_steps': ['Check submitted text', 'Verify API key is configured'],
         });
       default:
         return ArtifactModel.fromJson('feature', {
-          'title': 'Sample: developer context relay',
+          'title': text.isNotEmpty ? text : 'Feature Proposal',
           'components': ['Capture screen', 'AI service', 'Output screen'],
           'api_changes': ['None'],
           'implementation_tasks': [
