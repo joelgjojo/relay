@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
@@ -42,7 +43,7 @@ class AiService {
     this.fallbackModel = 'llama-3.1-8b-instant',
     this.timeout = const Duration(seconds: 12),
     http.Client? httpClient,
-  })  : apiKey = apiKey ?? (dotenv.env['GROQ_API_KEY'] ?? ''),
+  })  : apiKey = apiKey ?? (dotenv.isInitialized ? (dotenv.env['GROQ_API_KEY'] ?? '') : ''),
         _client = httpClient ?? http.Client();
 
   final String apiKey;
@@ -59,17 +60,23 @@ class AiService {
     required String rawText,
     required String type,
   }) async {
-    if (apiKey.trim().isEmpty) return _mockArtifact(type, rawText);
+    if (apiKey.trim().isEmpty) {
+      debugPrint('Relay AiService: API key is empty — returning MOCK artifact');
+      return _mockArtifact(type, rawText);
+    }
+    debugPrint('Relay AiService: API key present (${apiKey.substring(0, 4)}…), calling Groq API');
 
     try {
       return await _callApi(rawText, type, primaryModel);
     } on AiRateLimitException {
+      debugPrint('Relay AiService: Rate limited on $primaryModel, falling back to $fallbackModel');
       // Automatic fallback — try the smaller model once.
       return await _callApi(rawText, type, fallbackModel);
     }
   }
 
   Future<ArtifactModel> _callApi(String rawText, String type, String model) async {
+    debugPrint('Relay AiService: POST $_endpoint (model: $model, type: $type, input: ${rawText.length} chars)');
     final http.Response response;
     try {
       response = await _client

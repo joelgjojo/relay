@@ -13,7 +13,14 @@ import 'services/ai_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (e) {
+    debugPrint('Relay: .env asset failed to load ($e) — running in MOCK mode');
+  }
+  final hasKey = dotenv.isInitialized &&
+      (dotenv.env['GROQ_API_KEY']?.trim().isNotEmpty ?? false);
+  debugPrint('Relay: using ${hasKey ? 'LIVE' : 'MOCK'} mode');
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,

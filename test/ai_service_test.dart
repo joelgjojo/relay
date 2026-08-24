@@ -130,5 +130,20 @@ void main() {
         throwsA(isA<AiParseException>().having((e) => e.message, 'message', contains('API returned an empty response body.'))),
       );
     });
+
+    test('Mock fallback when API key is empty', () async {
+      final service = AiService(apiKey: '');
+      final artifact = await service.createArtifact(rawText: 'test input text', type: 'commit');
+      expect(artifact.type, 'commit');
+      // Mock should use the actual input text, not hardcoded data
+      expect(artifact.fields['problem'], 'test input text');
+    });
+
+    test('Mock fallback uses actual input for bug type', () async {
+      final service = AiService(apiKey: '');
+      final artifact = await service.createArtifact(rawText: 'my real bug description', type: 'bug');
+      expect(artifact.type, 'bug');
+      expect(artifact.title, 'my real bug description');
+    });
   });
 }
